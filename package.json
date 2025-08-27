@@ -1,0 +1,12 @@
+{
+  "dependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/jwt-decode": "^2.2.1",
+    "@types/mongodb": "^4.0.6",
+    "jose": "^6.0.13",
+    "jsonwebtoken": "^9.0.2",
+    "jwt-decode": "^4.0.0",
+    "mongodb": "^6.19.0",
+    "sweetalert2": "^11.22.5"
+  }
+}
