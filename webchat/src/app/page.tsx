@@ -1,17 +1,74 @@
 
-"use client";
-import { useEffect, useState, useRef } from 'react';
-import { getSocket } from '@/utils/socket-client';
-import { useRouter } from 'next/navigation';
+  "use client";
+  import { useEffect, useState, useRef } from 'react';
+  import { getSocket } from '@/utils/socket-client';
+  import { useRouter } from 'next/navigation';
+
+  // Logout function: remove token, set user offline, update lastActive
+  const handleLogout = async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (token) {
+      await fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      localStorage.removeItem('token');
+    }
+    window.location.href = '/login';
+  };
+
+  // Idle detection: set user offline after 1 minute of inactivity
+  function useIdleSetOffline() {
+    useEffect(() => {
+      let idleTimeout: NodeJS.Timeout | null = null;
+      let lastToken: string | null = null;
+      const setOffline = async () => {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+        if (token && token !== lastToken) lastToken = token;
+        if (token) {
+          await fetch('/api/set-offline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+          });
+        }
+      };
+      const resetTimer = () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        idleTimeout = setTimeout(setOffline, 60000); // 1 minute
+      };
+      // Listen for user activity
+      window.addEventListener('mousemove', resetTimer);
+      window.addEventListener('keydown', resetTimer);
+      window.addEventListener('scroll', resetTimer);
+      window.addEventListener('touchstart', resetTimer);
+      resetTimer();
+      return () => {
+        if (idleTimeout) clearTimeout(idleTimeout);
+        window.removeEventListener('mousemove', resetTimer);
+        window.removeEventListener('keydown', resetTimer);
+        window.removeEventListener('scroll', resetTimer);
+        window.removeEventListener('touchstart', resetTimer);
+      };
+    }, []);
+  }
 
 export default function Home() {
+  useIdleSetOffline();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const router = useRouter();
   const [allUsers, setAllUsers] = useState<{ name: string; online?: boolean }[]>([]);
   const [messages, setMessages] = useState<{ name: string; message: string; createdAt?: string }[]>([]);
   const [input, setInput] = useState('');
+  // Remove sending lock for input/button, but keep for retry
   const [sending, setSending] = useState(false);
-  const [pendingMsg, setPendingMsg] = useState<null | { name: string; message: string; status: 'sending' | 'failed' }>(null);
+  // Track multiple pending messages with sendingAt
+  type PendingMsg = { name: string; message: string; status: 'sending' | 'failed'; sendingAt: number };
+  type DbMsg = { name: string; message: string; createdAt?: string; sendingAt: number };
+  const [pendingMsgs, setPendingMsgs] = useState<PendingMsg[]>([]);
+  // Store last failed message for retry (per message)
+  const lastFailedMsgRef = useRef<{ name: string; message: string; sendingAt: number } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesBodyRef = useRef<HTMLDivElement>(null);
   const [showNewMsgBtn, setShowNewMsgBtn] = useState(false);
@@ -45,9 +102,61 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [router]);
 
-  // Fetch general chat messages initially and subscribe to real-time updates
+  // Use a ref to allow handleSend to call fetchMessages
+  const fetchMessagesRef = useRef<() => Promise<void>>(async () => {});
+  // Keep socket in a ref for use in handleSend
+  const socketRef = useRef<ReturnType<typeof getSocket> | null>(null);
+
+  // Always keep socket connected after login
   useEffect(() => {
     let socket: ReturnType<typeof getSocket> | null = null;
+    let mounted = true;
+    // Get my name and token from localStorage
+    let myName = '';
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (token) {
+      try {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        myName = payload.name || '';
+      } catch {}
+    }
+    // Save socket id to DB on connect
+    const saveSocketId = async (id: string) => {
+      if (token) {
+        await fetch('/api/user-socket', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, socketId: id })
+        });
+      }
+    };
+    // Remove socket id from DB on disconnect
+    const removeSocketId = async () => {
+      if (token) {
+        await fetch('/api/user-socket', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+      }
+    };
+    socket = getSocket(saveSocketId, removeSocketId);
+    socketRef.current = socket;
+    // Only fetch if another user sent a message
+    const handleRefresh = (senderName?: string) => {
+      if (senderName && senderName !== myName) fetchMessagesRef.current();
+    };
+    socket.on('refresh-messages', handleRefresh);
+    return () => {
+      mounted = false;
+      if (socket) {
+        socket.off('refresh-messages', handleRefresh);
+      }
+    };
+  }, []);
+
+  // Fetch general chat messages initially and when needed
+  useEffect(() => {
     let mounted = true;
     const fetchMessages = async () => {
       const res = await fetch('/api/generalchat');
@@ -56,14 +165,10 @@ export default function Home() {
         if (mounted) setMessages(data.messages || []);
       }
     };
+    fetchMessagesRef.current = fetchMessages;
     fetchMessages();
-    socket = getSocket();
-    socket.on('refresh-messages', fetchMessages);
     return () => {
       mounted = false;
-      if (socket) {
-        socket.off('refresh-messages', fetchMessages);
-      }
     };
   }, []);
 
@@ -81,41 +186,66 @@ export default function Home() {
     body.addEventListener('scroll', handle);
     // On new messages, check if user is at bottom
     handle();
+    // Only scroll to bottom if not showing any pending message
+    if (pendingMsgs.length === 0) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
     return () => body.removeEventListener('scroll', handle);
-  }, [messages]);
+  }, [messages, pendingMsgs]);
 
-  // Send message
-  const handleSend = async () => {
-    if (!input.trim() || sending) return;
-    setSending(true);
+  // Send or retry message
+  const handleSend = async (retryMsg?: { name: string; message: string; sendingAt?: number }) => {
+    if ((!input.trim() && !retryMsg) || (retryMsg && sending)) return;
+    if (retryMsg) setSending(true);
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     let name = 'Anonymous';
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        name = payload.name || 'Anonymous';
-      } catch {}
+    let message = '';
+    let sendingAt = Date.now();
+    if (retryMsg) {
+      name = retryMsg.name;
+      message = retryMsg.message;
+      sendingAt = retryMsg.sendingAt || Date.now();
+    } else {
+      if (token) {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          name = payload.name || 'Anonymous';
+        } catch {}
+      }
+      message = input;
     }
-    setPendingMsg({ name, message: input, status: 'sending' });
-    setInput('');
+    // Add to pendingMsgs
+    setPendingMsgs(prev => [...prev, { name, message, status: 'sending', sendingAt }]);
+    if (!retryMsg) setInput('');
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 0);
     try {
       const res = await fetch('/api/generalchat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, message: input })
+        body: JSON.stringify({ name, message })
       });
       if (!res.ok) throw new Error('Failed');
-      setPendingMsg(null); // will be replaced by polling
+      // Remove this pendingMsg
+      setPendingMsgs(prev => prev.filter(m => m.sendingAt !== sendingAt));
+      lastFailedMsgRef.current = null;
+      await fetchMessagesRef.current();
+      if (socketRef.current) {
+        socketRef.current.emit('new-message', name);
+      }
     } catch {
-      setPendingMsg({ name, message: input, status: 'failed' });
+      setPendingMsgs(prev => prev.map(m => m.sendingAt === sendingAt ? { ...m, status: 'failed' } : m));
+      lastFailedMsgRef.current = { name, message, sendingAt };
     }
-    setSending(false);
+    if (retryMsg) setSending(false);
   };
 
   // Get last message for General Chat preview
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   return (
     <div className="min-h-screen flex bg-gradient-to-br from-blue-100 via-blue-300 to-blue-500 dark:from-gray-900 dark:via-gray-800 dark:to-gray-700">
+  {/* Logout button inside sidebar bottom right */}
       {/* Sidebar overlay for mobile */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/40 md:hidden" onClick={() => setSidebarOpen(false)} />
@@ -171,7 +301,10 @@ export default function Home() {
             })()}
           </ul>
         </div>
-        {/* No footer for sidebar, but you can add one here if needed */}
+        {/* Logout button bottom right inside sidebar */}
+        <div className="p-4 flex justify-end">
+          <button onClick={handleLogout} className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-semibold shadow-lg">Logout</button>
+        </div>
       </aside>
       {/* Right: Chat Preview */}
       <main className="flex-1 flex flex-col bg-white/80 dark:bg-gray-800/80 rounded-xl shadow-lg m-4 border h-[96vh] min-w-0">
@@ -187,69 +320,81 @@ export default function Home() {
           </div>
         </header>
   <section ref={messagesBodyRef} className="flex-1 overflow-y-auto p-6 flex flex-col gap-4 min-h-0 relative">
-          {messages.map((msg, idx) => {
-            const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+          {/* Merge and sort messages and pendingMsgs by sendingAt/createdAt */}
+          {(() => {
+            // Get my name for alignment
             let myName = '';
+            const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
             if (token) {
               try {
                 const payload = JSON.parse(atob(token.split('.')[1]));
                 myName = payload.name || '';
               } catch {}
             }
-            const isMe = msg.name === myName;
-            // Format timestamp
-            let time = '';
-            if (msg.createdAt) {
-              const d = new Date(msg.createdAt);
-              const h = d.getHours().toString().padStart(2, '0');
-              const m = d.getMinutes().toString().padStart(2, '0');
-              time = `${h}:${m}`;
-            }
-            return (
-              <div
-                key={idx}
-                className={
-                  (isMe
-                    ? 'self-end bg-blue-500 text-white'
-                    : 'self-start bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white') +
-                  ' max-w-[80%] break-words rounded-lg px-4 py-2 relative'
-                }
-              >
-                <span className="block text-xs font-semibold mb-1 truncate max-w-[8rem]">{msg.name}</span>
-                {msg.message}
-                <div className="flex items-center justify-end mt-1">
-                  <span className="text-xs text-white/80 dark:text-gray-500">{time}</span>
-                </div>
-              </div>
-            );
-          })}
-          {/* Pending message bubble */}
-          {pendingMsg && (
-            <div
-              className={
-                'self-end bg-blue-500 text-white max-w-[80%] break-words rounded-lg px-4 py-2 relative'
+            // Map messages to have sendingAt = new Date(createdAt).getTime()
+            const dbMsgs: DbMsg[] = messages.map(m => ({
+              ...m,
+              sendingAt: m.createdAt ? new Date(m.createdAt).getTime() : 0
+            }));
+            // pendingMsgs: status, sendingAt, name, message
+            const allMsgs: (DbMsg | PendingMsg)[] = [...dbMsgs, ...pendingMsgs];
+            allMsgs.sort((a, b) => a.sendingAt - b.sendingAt);
+            return allMsgs.map((msg, idx) => {
+              const isPending = 'status' in msg;
+              const isMe = msg.name === myName;
+              // Format timestamp
+              let time = '';
+              if (!isPending && msg.createdAt) {
+                const d = new Date(msg.createdAt);
+                const h = d.getHours().toString().padStart(2, '0');
+                const m = d.getMinutes().toString().padStart(2, '0');
+                time = `${h}:${m}`;
+              } else if (isPending && msg.sendingAt) {
+                const d = new Date(msg.sendingAt);
+                const h = d.getHours().toString().padStart(2, '0');
+                const m = d.getMinutes().toString().padStart(2, '0');
+                time = `${h}:${m}`;
               }
-            >
-              <span className="block text-xs font-semibold mb-1 truncate max-w-[8rem]">{pendingMsg.name}</span>
-              {pendingMsg.message}
-              <div className="flex items-center justify-end mt-1 gap-2">
-                <span className="text-xs text-white/80">
-                  {(() => {
-                    const d = new Date();
-                    const h = d.getHours().toString().padStart(2, '0');
-                    const m = d.getMinutes().toString().padStart(2, '0');
-                    return `${h}:${m}`;
-                  })()}
-                </span>
-                <span className="text-xs text-white/80">
-                  {pendingMsg.status === 'sending' ? 'Sending...' : 'Failed to send.'}
-                </span>
-                <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          )}
+              return (
+                <div
+                  key={isPending ? `pending-${msg.sendingAt}` : `db-${idx}-${msg.sendingAt}`}
+                  className={
+                    (isMe
+                      ? 'self-end bg-blue-500 text-white'
+                      : 'self-start bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white') +
+                    ' max-w-[80%] break-words rounded-lg px-4 py-2 relative'
+                  }
+                >
+                  <span className="block text-xs font-semibold mb-1 truncate max-w-[8rem]">{msg.name}</span>
+                  {msg.message}
+                  <div className="flex items-center justify-end mt-1 gap-2">
+                    <span className="text-xs text-white/80 dark:text-gray-500">{time}</span>
+                    {isPending && (
+                      <span className="text-xs text-white/80">
+                        {msg.status === 'sending' ? 'Sending...' : (
+                          <>
+                            Failed to send.
+                            <button
+                              className="ml-2 underline text-white/80 hover:text-white font-semibold text-xs"
+                              onClick={() => handleSend({ name: msg.name, message: msg.message, sendingAt: msg.sendingAt })}
+                              disabled={sending}
+                            >
+                              Retry
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    )}
+                    {isPending && (
+                      <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    )}
+                  </div>
+                </div>
+              );
+            });
+          })()}
           <div ref={messagesEndRef} />
           {/* New message button */}
           {showNewMsgBtn && (
@@ -272,14 +417,16 @@ export default function Home() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') handleSend(); }}
-            disabled={sending}
+            // allow sending while previous is sending
+            disabled={false}
           />
           <button
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold"
-            onClick={handleSend}
-            disabled={sending}
+            onClick={() => handleSend()}
+            // allow sending while previous is sending
+            disabled={false}
           >
-            {sending ? 'Sending...' : 'Send'}
+            Send
           </button>
         </footer>
       </main>

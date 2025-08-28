@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { MongoClient } from 'mongodb';
-import { emitNewMessage } from '@/utils/socket-emit';
+// import { emitNewMessage } from '@/utils/socket-emit';
 
 const uri = process.env.MONGODB_URI;
 const dbName = process.env.MONGODB_DB;
@@ -30,7 +30,6 @@ export async function POST(req: Request) {
     const db = client.db(dbName);
     const doc = { name, message, createdAt: new Date() };
   await db.collection('generalchat').insertOne(doc);
-  emitNewMessage();
   return NextResponse.json({ success: true });
   } catch (e) {
     return NextResponse.json({ error: 'DB error' }, { status: 500 });

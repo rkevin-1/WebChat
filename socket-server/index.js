@@ -15,9 +15,11 @@ const io = new Server(server, {
 
 // Listen for new chat messages
 io.on('connection', (socket) => {
-  socket.on('new-message', () => {
-    // Broadcast to all clients except sender
-    socket.broadcast.emit('refresh-messages');
+  socket.on('new-message', (senderName) => {
+    console.log(`[SOCKET] new-message from:`, senderName, 'socket.id:', socket.id);
+    // Broadcast to all clients except sender, include senderName
+    socket.broadcast.emit('refresh-messages', senderName);
+    console.log(`[SOCKET] refresh-messages broadcasted with senderName:`, senderName);
   });
 });
 

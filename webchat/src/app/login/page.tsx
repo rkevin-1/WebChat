@@ -21,6 +21,7 @@ export default function Login() {
   const [checkingToken, setCheckingToken] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     if (token && isTokenValid(token)) {
@@ -36,6 +37,7 @@ export default function Login() {
       Swal.fire({ icon: 'error', title: 'Oops...', text: 'Email and password cannot contain spaces' });
       return;
     }
+    setLoggingIn(true);
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
@@ -49,9 +51,11 @@ export default function Login() {
         }
         router.push('/');
       } else {
+        setLoggingIn(false);
         Swal.fire({ icon: 'error', title: 'Oops...', text: data.error || 'Invalid credentials' });
       }
     } catch (err) {
+      setLoggingIn(false);
       Swal.fire({ icon: 'error', title: 'Oops...', text: 'Server error' });
     }
   };
@@ -73,6 +77,7 @@ export default function Login() {
             value={email}
             onChange={e => setEmail(e.target.value.replace(/\s/g, ''))}
             onKeyDown={e => { if (e.key === ' ') e.preventDefault(); }}
+            disabled={loggingIn}
           />
         </div>
         <div className="mb-5">
@@ -85,13 +90,16 @@ export default function Login() {
             value={password}
             onChange={e => setPassword(e.target.value.replace(/\s/g, ''))}
             onKeyDown={e => { if (e.key === ' ') e.preventDefault(); }}
+            disabled={loggingIn}
           />
         </div>
         <div className="mt-4 text-center">
           <span className="text-gray-700 dark:text-gray-300">Don't have an account? </span>
           <Link href="/register" className="text-blue-700 hover:underline dark:text-blue-400">Register</Link>
         </div>
-        <button type="submit" className="w-full text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800">Login</button>
+        <button type="submit" className="w-full text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800" disabled={loggingIn}>
+          {loggingIn ? 'Logging in...' : 'Login'}
+        </button>
       </form>
     </div>
   );
