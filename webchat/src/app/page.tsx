@@ -73,7 +73,7 @@ export default function Home() {
   const messagesBodyRef = useRef<HTMLDivElement>(null);
   const [showNewMsgBtn, setShowNewMsgBtn] = useState(false);
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+  // eslint-disable-next-line prefer-const
     const validateAndPing = async () => {
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       if (!token) {
@@ -98,7 +98,7 @@ export default function Home() {
       }
     };
     validateAndPing();
-    interval = setInterval(validateAndPing, 30000); // every 30s
+    const interval = setInterval(validateAndPing, 30000); // every 30s
     return () => clearInterval(interval);
   }, [router]);
 
@@ -110,7 +110,7 @@ export default function Home() {
   // Always keep socket connected after login
   useEffect(() => {
     let socket: ReturnType<typeof getSocket> | null = null;
-    let mounted = true;
+  // let mounted = true; // removed unused variable
     // Get my name and token from localStorage
     let myName = '';
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
@@ -148,7 +148,6 @@ export default function Home() {
     };
     socket.on('refresh-messages', handleRefresh);
     return () => {
-      mounted = false;
       if (socket) {
         socket.off('refresh-messages', handleRefresh);
       }
@@ -409,26 +408,6 @@ export default function Home() {
             </button>
           )}
         </section>
-  <footer className="p-4 border-t border-gray-200 dark:border-gray-800 flex gap-2 sticky bottom-0 z-10 bg-white/80 dark:bg-gray-800/80 rounded-b-xl">
-          <input
-            type="text"
-            className="flex-1 rounded-lg border border-gray-300 dark:border-gray-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:bg-gray-900 dark:text-white"
-            placeholder="Type a message..."
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') handleSend(); }}
-            // allow sending while previous is sending
-            disabled={false}
-          />
-          <button
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold"
-            onClick={() => handleSend()}
-            // allow sending while previous is sending
-            disabled={false}
-          >
-            Send
-          </button>
-        </footer>
       </main>
     </div>
   );

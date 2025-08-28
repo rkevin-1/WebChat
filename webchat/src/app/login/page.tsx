@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { jwtDecode } from 'jwt-decode';
 // Helper to check if JWT is valid (not expired)
+interface JwtPayload { exp?: number }
 function isTokenValid(token: string) {
   try {
-    const decoded: any = jwtDecode(token);
+    const decoded: JwtPayload = jwtDecode(token);
     if (!decoded.exp) return false;
     return decoded.exp * 1000 > Date.now();
   } catch {
@@ -94,7 +95,7 @@ export default function Login() {
           />
         </div>
         <div className="mt-4 text-center">
-          <span className="text-gray-700 dark:text-gray-300">Don't have an account? </span>
+          <span className="text-gray-700 dark:text-gray-300">Don&apos;t have an account? </span>
           <Link href="/register" className="text-blue-700 hover:underline dark:text-blue-400">Register</Link>
         </div>
         <button type="submit" className="w-full text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-600 dark:hover:bg-blue-700 dark:focus:ring-blue-800" disabled={loggingIn}>
